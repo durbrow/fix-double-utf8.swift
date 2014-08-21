@@ -1,4 +1,4 @@
-#!/usr/bin/env xcrun swift -O -g
+#!/usr/bin/env xcrun swift -g
 // Fix doubly UTF8 encoded file names
 
 // entry point is at the bottom
@@ -93,9 +93,8 @@ func FixDoubleUTF8(name: String) -> FixResult
 func ProcessName(dirname: String, basename: String)
 {
     if verbose > 3 { println("considering '\(basename)'") }
-    let try = FixDoubleUTF8(basename);
 
-    switch (try) {
+    switch (FixDoubleUTF8(basename)) {
     case .NoChange:
         if verbose > 2 { println("'\(basename)' doesn't need to be fixed") }
         return;
