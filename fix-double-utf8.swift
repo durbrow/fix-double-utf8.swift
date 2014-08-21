@@ -1,4 +1,4 @@
-#!/usr/bin/env xcrun swift
+#!/usr/bin/env xcrun swift -O -g
 // Fix doubly UTF8 encoded file names
 
 // entry point is at the bottom
@@ -9,6 +9,7 @@ import Foundation;
 var verbose = 0;        // verbosity level
 var dryrun = false;     // don't actually do anything
 var recurse = false;    // recursively traverse directories
+var memoizer: Dictionary<String, UnicodeScalar> = [:]
 let fmgr = NSFileManager.defaultManager();
 
 enum FixResult {
@@ -29,12 +30,11 @@ func DoubleUTF8Fix(name: String) -> FixResult
     {
         var isASCII = true;
         var y: [UInt8] = [];
-        var lookup: Dictionary<String, UnicodeScalar> = [:]
 
         func ShortCode(l: UnicodeScalar, c: UnicodeScalar) -> UnicodeScalar
         {
             let s = "\(l)\(c)";
-            let r = lookup[s];
+            let r = memoizer[s];
             if let y = r { return y }
 
             for i in 0x80...0xFF {
@@ -42,11 +42,11 @@ func DoubleUTF8Fix(name: String) -> FixResult
                 let v = String(ch);
 
                 if v == s {
-                    lookup[s] = ch;
+                    memoizer[s] = ch;
                     return ch;
                 }
             }
-            return UnicodeScalar(0xFFFF);
+            return UnicodeScalar(0xFFFD); // Unicode replacement character �
         }
         for ch in bad.unicodeScalars {
             if ch.value < 0x80 {
@@ -115,23 +115,21 @@ func ProcessName(dirname: String, basename: String)
     }
 }
 
-func isDirectoryAtPath(mgr: NSFileManager, path: String) -> Bool
+func isDirectoryAtPath(path: String) -> Bool
 {
     var isDir: ObjCBool = false;
-    return mgr.fileExistsAtPath(path, isDirectory: &isDir) ? isDir ? true : false : false
+    return fmgr.fileExistsAtPath(path, isDirectory: &isDir) ? isDir ? true : false : false
 }
 
 func ProcessDirectory(path: String)
 {
-    let dir = fmgr.contentsOfDirectoryAtPath(path, error: nil)!;
-
     if verbose > 1 { println("examining directory '\(path)'") }
-    for i in dir {
-        let name = i as String;
+
+    let dir = fmgr.contentsOfDirectoryAtPath(path, error: nil)!;
+    for name in filter(map(dir, { $0 as String }), { !$0.hasPrefix(".") }) {
         let fullname = path.stringByAppendingPathComponent(name);
 
-        if name.hasPrefix(".") { continue }
-        if isDirectoryAtPath(fmgr, fullname) {
+        if isDirectoryAtPath(fullname) {
             ProcessName(path, name);
             if recurse { ProcessDirectory(fullname) }
         }
@@ -141,7 +139,7 @@ func ProcessDirectory(path: String)
 
 func ProcessDirectoryOrFile(path: String)
 {
-    if isDirectoryAtPath(fmgr, path) {
+    if isDirectoryAtPath(path) {
         ProcessDirectory(path);
         return;
     }
@@ -150,7 +148,7 @@ func ProcessDirectoryOrFile(path: String)
     ProcessName(dirname, basename);
 }
 
-func Main(progname: String, arguments: Slice<String>) -> ()
+func Main(progname: String, arguments: Slice<String>)
 {
     for arg in arguments {
         switch (arg) {
