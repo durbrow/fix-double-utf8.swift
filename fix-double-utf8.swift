@@ -9,8 +9,39 @@ import Foundation;
 var verbose = 0;        // verbosity level
 var dryrun = false;     // don't actually do anything
 var recurse = false;    // recursively traverse directories
-var memoizer: Dictionary<String, UnicodeScalar> = [:]
 let fmgr = NSFileManager.defaultManager();
+
+class Combiner {
+    private var memoizer: Dictionary<String, UnicodeScalar>
+
+    init()
+    {
+        memoizer = [:];
+    }
+    func lookup(base: UnicodeScalar, _ combi: UnicodeScalar) -> UnicodeScalar
+    {
+        // this is a total hack and I'm sure there's a better way, but this is
+        // good enough for this program. This hunts for an 8-bit character that
+        // swift considers to be the same grapheme as the combined character
+        let combined = "\(base)\(combi)";
+        let rslt = memoizer[combined];
+        if let y = rslt { return y }
+
+        for i in 0x80...0xFF {
+            let ch = UnicodeScalar(i);
+            let v = String(ch);
+
+            if String(ch) == combined {
+                memoizer[combined] = ch;
+                return ch;
+            }
+        }
+        let ch = UnicodeScalar(0xFFFD); // Unicode replacement character �
+        memoizer[combined] = ch;
+        return ch;
+    }
+};
+var combiner = Combiner();
 
 enum FixResult {
     case NoChange
@@ -18,84 +49,51 @@ enum FixResult {
     case Error
 }
 
-func DoubleUTF8Fix(name: String) -> FixResult
+func FixDoubleUTF8(name: String) -> FixResult
 {
-    enum FixResult1 {
-        case IsASCII
-        case IsNotUTF8
-        case UTF8([UInt8])
+    var isASCII = true;
+    var y: [UInt8] = [];
+
+    for ch in name.unicodeScalars {
+        if ch.value < 0x80 {
+            y.append(UInt8(ch));
+            continue;
+        }
+        isASCII = false;
+
+        if ch.value < 0x100 {
+            y.append(UInt8(ch));
+            continue;
+        }
+        // might be a combining character that when combined with the
+        // preceeding character maps to a codepoint in the UTF8 range
+        if y.count == 0 { return FixResult.NoChange }
+
+        let last = y.removeLast();
+        let repl = combiner.lookup(UnicodeScalar(last), ch);
+        // the replacement needs to be in the UTF8 range
+        if repl.value >= 0x100 { return FixResult.NoChange }
+
+        y.append(UInt8(repl));
     }
-    
-    func TryFix(bad: String) -> FixResult1
-    {
-        var isASCII = true;
-        var y: [UInt8] = [];
+    if isASCII { return FixResult.NoChange }
 
-        func ShortCode(l: UnicodeScalar, c: UnicodeScalar) -> UnicodeScalar
-        {
-            let s = "\(l)\(c)";
-            let r = memoizer[s];
-            if let y = r { return y }
-
-            for i in 0x80...0xFF {
-                let ch = UnicodeScalar(i);
-                let v = String(ch);
-
-                if v == s {
-                    memoizer[s] = ch;
-                    return ch;
-                }
-            }
-            return UnicodeScalar(0xFFFD); // Unicode replacement character �
+    y.append(0); // null terminator
+    return y.withUnsafeBufferPointer {
+        let cstr = UnsafePointer<CChar>($0.baseAddress);
+        let rslt = String.fromCStringRepairingIllFormedUTF8(cstr);
+        if let str = rslt.0 {
+            if !rslt.1 { return FixResult.Fixed(str) }
+            if verbose > 1 { println("'\(name)' -> '\(str)'") }
         }
-        for ch in bad.unicodeScalars {
-            if ch.value < 0x80 {
-                y.append(UInt8(ch));
-                continue;
-            }
-            isASCII = false;
-
-            if ch.value < 0x100 {
-                y.append(UInt8(ch));
-                continue;
-            }
-            // might be a combining character that when combined with the
-            // preceeding character maps to a codepoint in the UTF8 range
-            if y.count == 0 { return FixResult1.IsNotUTF8 }
-
-            let last = y.removeLast();
-            let repl = ShortCode(UnicodeScalar(last), ch);
-            // the replacement needs to be in the UTF8 range
-            if repl.value >= 0x100 { return FixResult1.IsNotUTF8 }
-
-            y.append(UInt8(repl));
-        }
-        if isASCII { return FixResult1.IsASCII }
-
-        y.append(0); // null terminator
-        return FixResult1.UTF8(y);
-    }
-    let try = TryFix(name);
-    switch (try) {
-    case .IsASCII, .IsNotUTF8:
-        return FixResult.NoChange;
-    case let .UTF8(y):
-        return y.withUnsafeBufferPointer {
-            let cstr = UnsafePointer<CChar>($0.baseAddress);
-            let rslt = String.fromCStringRepairingIllFormedUTF8(cstr);
-            if let str = rslt.0 {
-                if !rslt.1 { return FixResult.Fixed(str) }
-                if verbose > 1 { println("'\(name)' -> '\(str)'") }
-            }
-            return FixResult.Error;
-        }
+        return FixResult.Error;
     }
 }
 
 func ProcessName(dirname: String, basename: String)
 {
     if verbose > 3 { println("considering '\(basename)'") }
-    let try = DoubleUTF8Fix(basename);
+    let try = FixDoubleUTF8(basename);
 
     switch (try) {
     case .NoChange:
