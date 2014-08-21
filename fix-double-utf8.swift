@@ -29,7 +29,6 @@ class Combiner {
 
         for i in 0x80...0xFF {
             let ch = UnicodeScalar(i);
-            let v = String(ch);
 
             if String(ch) == combined {
                 memoizer[combined] = ch;
@@ -80,8 +79,8 @@ func FixDoubleUTF8(name: String) -> FixResult
 
     y.append(0); // null terminator
     return y.withUnsafeBufferPointer {
-        let cstr = UnsafePointer<CChar>($0.baseAddress);
-        let rslt = String.fromCStringRepairingIllFormedUTF8(cstr);
+        let cstr = UnsafePointer<CChar>($0.baseAddress); // typecase from uint8_t * to char *
+        let rslt = String.fromCStringRepairingIllFormedUTF8(cstr); // -> (String, Bool)
         if let str = rslt.0 {
             if !rslt.1 { return FixResult.Fixed(str) }
             if verbose > 1 { println("'\(name)' -> '\(str)'") }
@@ -200,10 +199,10 @@ for i in 0..<test.count {
     case .NoChange:
         println("test failed; no change");
     case .Error:
-        println("test failed; no conversion error");
+        println("test failed; conversion error");
     case let .Fixed(fixed):
         if fixed == gold { println("test passed") }
-        else             { println("test failed") }
+        else             { println("test failed; doesn't match") }
     }
 }
 #endif
